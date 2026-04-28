@@ -1,0 +1,156 @@
+Build an ASA
+
+
+-------------------------------------------------------------------------------------------
+
+capabilities of the agent that needs to be built
+
+	- Navigate The enviroment
+	- Pick up the box from the spawner
+	- Delivetr the box to the target
+
+-------------------------------------------------------------------------------------------
+Where to play:
+
+	https://deliveroojs.azurewebsites.net/
+
+	latest version at 
+	https://deliveroojsdev.azurewebsites.net/
+
+	localy at
+	http://localhost:8080
+
+-------------------------------------------------------------------------------------------
+
+How to play
+	As user:      
+	`a`: left, `s`: down, `d`: right, `w`: up, `q`: pickup, `e`: putdown
+
+	As an admin:  
+	press `space` to create or dispose parcels and numeric keys to modify tiles.
+
+
+
+-------------------------------------------------------------------------------------------
+
+Deliveroo.js SDK Architecture - provides three main client classes:
+
+	DjsClientSocket:
+	Real-time Socket.io client for game actions and events
+
+	DjsRestClient:
+	HTTP RESTful API for CRUD operations
+
+	DjsConnect:
+	Factory class for authentication and connection
+
+
+	--------------------------------------------------------
+		DjsConnect
+		│
+		├─→ DjsClientSocket (WebSocket)
+		│       ├─ Game Actions (move, pickup, putdown)
+		│	└─ Event Listeners (sensing, messages)
+		│       
+		│
+		└─→ DjsRestClient (HTTP)
+			└─ Admin Operations
+		
+	--------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+Connection & Authentication
+
+	Method 1: Hardcoded
+	const socket = DjsConnect( 'localhost:8080', 'YOUR_TOKEN' } );
+
+
+	Method 2: Environment Variables
+	# This is file .env
+	HOST=localhost:8080
+	TOKEN=your_token_here
+	# or
+	NAME=MyAgentName
+
+
+
+-------------------------------------------------------------------------------------------
+
+Game Actions
+
+	Movement:
+	const result = await socket.emitMove('up'); // 'right', 'left', 'down'
+	// Returns: {x, y} on success, false on failure
+
+	Pickup Parcels:
+	const parcels = await socket.emitPickup();
+	// Returns: [{id, x, y, carriedBy, reward}, ...]
+
+	Drop Parcels:
+	const dropped = await socket.emitPutdown(selected);
+	// selected: array of parcel IDs (or undefined for all)
+
+
+-------------------------------------------------------------------------------------------
+
+Event Listeners		-	The API uses Node.js EventEmitter pattern:
+
+	// Agent identity
+	socket.on('you', (id, name, x, y, score) => { /* ... */ });
+
+	// Map information
+	socket.on('map', (width, height, tiles) => { /* ... */ });
+	socket.on('tile', (x, y, delivery) => { /* ... */ });
+
+	// Sensing
+	socket.on('agentsSensing', (agents) => { /* ... */ });
+	socket.on('parcelsSensing', (parcels) => { /* ... */ });
+
+	// Connection
+	socket.on('connect', () => { /* ... */ });
+	socket.on('disconnect', () => { /* ... */ });
+
+-------------------------------------------------------------------------------------------
+
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------
+
