@@ -1,0 +1,262 @@
+● Here's a concrete, ordered plan to turn the lab 5 stub into a working PDDL-driven agent.                                                                             
+                                                                                                                                                                     
+  1. Install and import the PDDL client
+                                                                                                                                                                       
+  npm install @unitn-asa/pddl-client@0.0.37
+  At the top of intention_revision.js:                                                                                                                                 
+  import { readFile } from 'fs/promises';                                                                                                                            
+  import {
+    PddlDomain, PddlAction, PddlProblem,
+    PddlExecutor, onlineSolver, Beliefset
+  } from "@unitn-asa/pddl-client";
+  readFile is referenced inside PddlMove but never imported — that alone is enough to crash the file.
+
+  2. Fix the obvious bugs already in the file
+
+  - Remove the stray ù on line 437 (onlineSolver( domain, problem );ù) — parser error.
+  - In Intention.achieve() line 272: new planClass(this.parent) should be new planClass(this.#parent) (lab 4 already has it right).
+  - In the catch on line 281: error:, ...error blows up if error is a string — drop the spread or guard it.
+  - In the loop's validity check (line 117), intention.predicate[2] is the parcel's y, not its id (the id is at index 3). Change to predicate[3], and add a
+  this.intention_queue.shift() before the continue; or you get an infinite loop on a stale intention.
+
+  3. Decide what your PDDL domain looks like
+
+  Right now domain-lights.pddl is loaded but it's a tutorial domain about light switches — not the Deliveroo grid. Write a domain-deliveroo.pddl with the predicates
+  you actually emit from the map handler:
+  - objects: tiles like t1_2, an agent me
+  - predicates: (at ?a ?t), (right ?t1 ?t2), (left ?t1 ?t2), (up ?t1 ?t2), (down ?t1 ?t2), (delivery ?t)
+  - actions: move-right, move-left, move-up, move-down with appropriate pre/effects, plus pickup and putdown if you want PDDL to plan delivery too.
+
+  4. Build a complete belief set from onMap
+
+  The current loop only declares tile and right — and tiles.find( (_x,_y) => …) is wrong because find's callback receives (element, index), not (x, y). Replace it
+  with:
+  client.onMap( (width, height, tiles) => {
+    for (const t of tiles) {
+      const name = `t${t.x}_${t.y}`;
+      myBeliefset.declare(`tile ${name}`);
+      if (t.delivery) myBeliefset.declare(`delivery ${name}`);
+      const right = tiles.find(o => o.x === t.x + 1 && o.y === t.y);
+      const up    = tiles.find(o => o.x === t.x     && o.y === t.y + 1);
+      if (right) myBeliefset.declare(`right ${name} t${right.x}_${right.y}`);
+      if (up)    myBeliefset.declare(`up ${name} t${up.x}_${up.y}`);
+    }
+  });
+  And keep (at me tX_Y) updated inside onYou (undeclare the old position, declare the new one) — otherwise the planner has no idea where you are.
+
+  5. Make PddlMove actually execute moves
+
+  The stub logs 'executor lighton'. Wire the executors to the SDK:
+  async execute (go_to, x, y) {
+    if (this.stopped) throw ['stopped'];
+    const problem = new PddlProblem(
+      'deliveroo',
+      myBeliefset.objects.join(' '),
+      myBeliefset.toPddlString() + ` (at me t${me.x}_${me.y})`,
+      `at me t${x}_${y}`
+    ).toPddlString();
+
+    const domain = await readFile('./domain-deliveroo.pddl', 'utf8');
+    const plan = await onlineSolver(domain, problem);
+    if (!plan) throw 'no plan';
+    if (this.stopped) throw ['stopped'];
+
+    const exec = new PddlExecutor(
+      { name: 'move-right', executor: () => client.move('right') },
+      { name: 'move-left',  executor: () => client.move('left')  },
+      { name: 'move-up',    executor: () => client.move('up')    },
+      { name: 'move-down',  executor: () => client.move('down')  },
+    );
+    await exec.exec(plan);
+    return true;
+  }
+
+  6. Register PddlMove in the plan library
+
+  At the bottom of the file:
+  planLibrary.push(GoPickUp);
+  planLibrary.push(PddlMove);   // try the planner first
+  planLibrary.push(BlindMove);  // fallback if planning fails
+  Order matters: Intention.achieve() walks the library in order, so put PddlMove before BlindMove so it's tried first and BlindMove becomes the fallback.
+
+  7. Add delivery, not just pickup
+
+  Right now optionsGeneration only emits go_pick_up. Once you're carrying something, you need a go_put_down option that targets a delivery tile, plus a GoDeliver plan
+  that does subIntention(['go_to', dx, dy]) then client.putdown(). Without this the agent picks up parcels and just sits on them.
+
+  8. Implement IntentionRevisionRevise.push
+
+  This is the lab's actual TODO. Score each candidate predicate by parcel.reward − distance(me, parcel) (and for delivery, weight against the cost of getting there),
+  then sort intention_queue by score. If the new top differs from the running intention, call current.stop(). This is what turns a reactive picker into a
+  utility-driven agent.
+
+  9. Sanity-check the run loop
+
+  After the fixes in step 2, also consider:
+  - Catching await intention.achieve() errors so a single failed plan doesn't poison the queue (lab already does this — just verify it).
+  - Replanning when me's position drifts during the wait — the precondition (at me …) you fed to the solver may no longer hold.
+
+  10. Run it end to end
+
+  - Start the local Deliveroo backend (docker-compose up in Deliveroo.js/) or point the token at the hosted server.
+  - node intention_revision.js.
+  - Watch the console: you should see IntentionRevisionReplace.push […], then achieving intention … with plan PddlMove, then move events.
+
+  If you only have time for a subset, do 2 → 1 → 6 → 5 → 4 → 3 in that order — that's the minimum to get one PDDL-planned move out the door. Steps 7–8 are where the
+  agent actually starts scoring well.
+
+✻ Cogitated for 36s
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⬆ /gsd:update │ Opus 4.7 │ ASA_Proj ░░░░░░░░░░ 7%
+  - Catching await intention.achieve() errors so a single failed plan doesn't poison the queue (lab already does this — just verify it).
+  - Replanning when me's position drifts during the wait — the precondition (at me …) you fed to the solver may no longer hold.
+
+  10. Run it end to end
+
+  - Start the local Deliveroo backend (docker-compose up in Deliveroo.js/) or point the token at the hosted server.
+  - node intention_revision.js.
+  - Watch the console: you should see IntentionRevisionReplace.push […], then achieving intention … with plan PddlMove, then move events.
+
+  If you only have time for a subset, do 2 → 1 → 6 → 5 → 4 → 3 in that order — that's the minimum to get one PDDL-planned move out the door. Steps 7–8 are where the
+  agent actually starts scoring well.
+
+✻ Cogitated for 36s
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⬆ /gsd:update │ Opus 4.7 │ ASA_Proj ░░░░░░░░░░ 7%
+  that does subIntention(['go_to', dx, dy]) then client.putdown(). Without this the agent picks up parcels and just sits on them.
+
+  8. Implement IntentionRevisionRevise.push
+
+  This is the lab's actual TODO. Score each candidate predicate by parcel.reward − distance(me, parcel) (and for delivery, weight against the cost of getting there),
+  then sort intention_queue by score. If the new top differs from the running intention, call current.stop(). This is what turns a reactive picker into a
+  utility-driven agent.
+
+  9. Sanity-check the run loop
+
+  After the fixes in step 2, also consider:
+  - Catching await intention.achieve() errors so a single failed plan doesn't poison the queue (lab already does this — just verify it).
+  - Replanning when me's position drifts during the wait — the precondition (at me …) you fed to the solver may no longer hold.
+
+  10. Run it end to end
+
+  - Start the local Deliveroo backend (docker-compose up in Deliveroo.js/) or point the token at the hosted server.
+  - node intention_revision.js.
+  - Watch the console: you should see IntentionRevisionReplace.push […], then achieving intention … with plan PddlMove, then move events.
+
+  If you only have time for a subset, do 2 → 1 → 6 → 5 → 4 → 3 in that order — that's the minimum to get one PDDL-planned move out the door. Steps 7–8 are where the
+  agent actually starts scoring well.
+
+✻ Cogitated for 36s
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⬆ /gsd:update │ Opus 4.7 │ ASA_Proj ░░░░░░░░░░ 7%
+
+  7. Add delivery, not just pickup
+
+  Right now optionsGeneration only emits go_pick_up. Once you're carrying something, you need a go_put_down option that targets a delivery tile, plus a GoDeliver plan
+  that does subIntention(['go_to', dx, dy]) then client.putdown(). Without this the agent picks up parcels and just sits on them.
+
+  8. Implement IntentionRevisionRevise.push
+
+  This is the lab's actual TODO. Score each candidate predicate by parcel.reward − distance(me, parcel) (and for delivery, weight against the cost of getting there),
+  then sort intention_queue by score. If the new top differs from the running intention, call current.stop(). This is what turns a reactive picker into a
+  utility-driven agent.
+
+  9. Sanity-check the run loop
+
+  After the fixes in step 2, also consider:
+  - Catching await intention.achieve() errors so a single failed plan doesn't poison the queue (lab already does this — just verify it).
+  - Replanning when me's position drifts during the wait — the precondition (at me …) you fed to the solver may no longer hold.
+
+  10. Run it end to end
+
+  - Start the local Deliveroo backend (docker-compose up in Deliveroo.js/) or point the token at the hosted server.
+  - node intention_revision.js.
+  - Watch the console: you should see IntentionRevisionReplace.push […], then achieving intention … with plan PddlMove, then move events.
+
+  If you only have time for a subset, do 2 → 1 → 6 → 5 → 4 → 3 in that order — that's the minimum to get one PDDL-planned move out the door. Steps 7–8 are where the
+  agent actually starts scoring well.
+
+✻ Cogitated for 36s
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⬆ /gsd:update │ Opus 4.7 │ ASA_Proj ░░░░░░░░░░ 7%
+  planLibrary.push(GoPickUp);
+  planLibrary.push(PddlMove);   // try the planner first
+  planLibrary.push(BlindMove);  // fallback if planning fails
+  Order matters: Intention.achieve() walks the library in order, so put PddlMove before BlindMove so it's tried first and BlindMove becomes the fallback.
+
+  7. Add delivery, not just pickup
+
+  Right now optionsGeneration only emits go_pick_up. Once you're carrying something, you need a go_put_down option that targets a delivery tile, plus a GoDeliver plan
+  that does subIntention(['go_to', dx, dy]) then client.putdown(). Without this the agent picks up parcels and just sits on them.
+
+  8. Implement IntentionRevisionRevise.push
+
+  This is the lab's actual TODO. Score each candidate predicate by parcel.reward − distance(me, parcel) (and for delivery, weight against the cost of getting there),
+  then sort intention_queue by score. If the new top differs from the running intention, call current.stop(). This is what turns a reactive picker into a
+  utility-driven agent.
+
+  9. Sanity-check the run loop
+
+  After the fixes in step 2, also consider:
+  - Catching await intention.achieve() errors so a single failed plan doesn't poison the queue (lab already does this — just verify it).
+  - Replanning when me's position drifts during the wait — the precondition (at me …) you fed to the solver may no longer hold.
+
+  10. Run it end to end
+
+  - Start the local Deliveroo backend (docker-compose up in Deliveroo.js/) or point the token at the hosted server.
+  - node intention_revision.js.
+  - Watch the console: you should see IntentionRevisionReplace.push […], then achieving intention … with plan PddlMove, then move events.
+
+  If you only have time for a subset, do 2 → 1 → 6 → 5 → 4 → 3 in that order — that's the minimum to get one PDDL-planned move out the door. Steps 7–8 are where the
+  agent actually starts scoring well.
+
+✻ Cogitated for 36s
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⬆ /gsd:update │ Opus 4.7 │ ASA_Proj ░░░░░░░░░░ 7%
+
+  At the bottom of the file:
+  planLibrary.push(GoPickUp);
+  planLibrary.push(PddlMove);   // try the planner first
+  planLibrary.push(BlindMove);  // fallback if planning fails
+  Order matters: Intention.achieve() walks the library in order, so put PddlMove before BlindMove so it's tried first and BlindMove becomes the fallback.
+
+  7. Add delivery, not just pickup
+
+  Right now optionsGeneration only emits go_pick_up. Once you're carrying something, you need a go_put_down option that targets a delivery tile, plus a GoDeliver plan
+  that does subIntention(['go_to', dx, dy]) then client.putdown(). Without this the agent picks up parcels and just sits on them.
+
+  8. Implement IntentionRevisionRevise.push
+
+  This is the lab's actual TODO. Score each candidate predicate by parcel.reward − distance(me, parcel) (and for delivery, weight against the cost of getting there),
+  then sort intention_queue by score. If the new top differs from the running intention, call current.stop(). This is what turns a reactive picker into a
+  utility-driven agent.
+
+  9. Sanity-check the run loop
+
+  After the fixes in step 2, also consider:
+  - Catching await intention.achieve() errors so a single failed plan doesn't poison the queue (lab already does this — just verify it).
+  - Replanning when me's position drifts during the wait — the precondition (at me …) you fed to the solver may no longer hold.
+
+  10. Run it end to end
+
+  - Start the local Deliveroo backend (docker-compose up in Deliveroo.js/) or point the token at the hosted server.
+  - node intention_revision.js.
+  - Watch the console: you should see IntentionRevisionReplace.push […], then achieving intention … with plan PddlMove, then move events.
+
+  If you only have time for a subset, do 2 → 1 → 6 → 5 → 4 → 3 in that order — that's the minimum to get one PDDL-planned move out the door. Steps 7–8 are where the
+  agent actually starts scoring well.
